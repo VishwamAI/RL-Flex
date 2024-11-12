@@ -1,0 +1,15 @@
+# JAX with Flax and Optax
+jax
+jaxlib  # Change according to your CUDA version, or use the CPU version
+flax
+optax
+
+# PyTorch
+torch
+torchvision  # Optional, if you need computer vision functionalities
+
+# TensorFlow
+tensorflow  # Adjust based on your needs
+
+# NumPy
+numpy
