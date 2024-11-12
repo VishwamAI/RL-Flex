@@ -30,7 +30,6 @@ import logging
 import numpy as np
 import time
 import scipy.signal
-from ..utils import utils
 
 # Constants for PPO
 gamma = 0.99

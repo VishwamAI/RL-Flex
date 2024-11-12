@@ -26,7 +26,8 @@ import jax.numpy as jnp
 import flax.linen as nn
 import optax
 from abc import ABC, abstractmethod
-from NeuroFlex.utils.utils import tokenize_text, get_activation_function
+def tokenize_text(text: str) -> List[int]:
+    return [ord(char) for char in text]
 
 class AgenticBehavior(ABC):
     @abstractmethod

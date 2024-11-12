@@ -24,6 +24,7 @@ import jax
 import jax.numpy as jnp
 import flax.linen as nn
 import optax
+from flax.training import train_state
 from typing import Tuple, Dict, Any
 
 class Environment:

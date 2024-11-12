@@ -27,8 +27,6 @@ from typing import List, Tuple, Dict, Any
 import gym
 import logging
 import time
-from ..utils import utils
-from ..core_neural_networks import PyTorchModel, CNN, LSTMModule, LRNN, MachineLearning
 from .rl_module import PrioritizedReplayBuffer, RLAgent, RLEnvironment, train_rl_agent
 
 class AdvancedRLAgent(RLAgent):
