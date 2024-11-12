@@ -19,21 +19,3 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
-
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.nn.functional as F
-from typing import Dict, Any, List
-from .rl_algorithms import RLAgent
-
-class SACAgent:
-    """Soft Actor-Critic (SAC) agent implementation."""
-    def __init__(self, state_dim: int, action_dim: int, hidden_dim: int = 256,
-                 learning_rate: float = 3e-4, gamma: float = 0.99,
-                 tau: float = 0.005, alpha: float = 0.2):
-        self.state_dim = state_dim
-        self.action_dim = action_dim
-        self.gamma = gamma
-        self.tau = tau
-        self.alpha = alpha
