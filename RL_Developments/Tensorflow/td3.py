@@ -123,18 +123,20 @@ class TD3Agent:
         # Get appropriate device strategy
         self.strategy = get_device_strategy()
 
-        # Create networks
-        self.actor_critic = TD3Network(state_dim, action_dim, max_action)
-        self.target_network = TD3Network(state_dim, action_dim, max_action)
+        # Initialize all components within strategy scope
+        with self.strategy.scope():
+            # Create networks
+            self.actor_critic = TD3Network(state_dim, action_dim, max_action)
+            self.target_network = TD3Network(state_dim, action_dim, max_action)
 
-        # Copy weights to target network
-        for target, source in zip(self.target_network.variables,
-                                self.actor_critic.variables):
-            target.assign(source)
+            # Copy weights to target network
+            for target, source in zip(self.target_network.variables,
+                                    self.actor_critic.variables):
+                target.assign(source)
 
-        # Create optimizers
-        self.actor_optimizer = tf.keras.optimizers.Adam(learning_rate)
-        self.critic_optimizer = tf.keras.optimizers.Adam(learning_rate)
+            # Create optimizers
+            self.actor_optimizer = tf.keras.optimizers.Adam(learning_rate)
+            self.critic_optimizer = tf.keras.optimizers.Adam(learning_rate)
 
     def get_action(self, state: tf.Tensor, noise_scale: float = 0.1) -> tf.Tensor:
         """Select action using current policy.
@@ -165,6 +167,13 @@ class TD3Agent:
         Returns:
             Dictionary containing loss metrics
         """
+        # Ensure tensors are in the correct format
+        states = tf.convert_to_tensor(states, dtype=tf.float32)
+        actions = tf.convert_to_tensor(actions, dtype=tf.float32)
+        rewards = tf.convert_to_tensor(rewards, dtype=tf.float32)
+        next_states = tf.convert_to_tensor(next_states, dtype=tf.float32)
+        dones = tf.convert_to_tensor(dones, dtype=tf.float32)
+
         # Update critics
         with tf.GradientTape(persistent=True) as tape:
             # Select next actions with target policy smoothing

@@ -97,9 +97,10 @@ class ModelBasedAgent:
         self.curiosity_weight = curiosity_weight
         self.base_agent = base_agent
 
-        # Get appropriate device strategy
-        self.strategy = get_device_strategy()
+        # Use the same strategy as the base agent
+        self.strategy = base_agent.strategy
 
+        # Initialize world model and optimizer using the same strategy
         with self.strategy.scope():
             self.world_model = WorldModel(state_dim, action_dim)
             self.optimizer = tf.keras.optimizers.Adam(learning_rate)
