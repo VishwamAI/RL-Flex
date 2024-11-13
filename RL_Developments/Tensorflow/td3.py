@@ -120,8 +120,11 @@ class TD3Agent:
         self.policy_delay = policy_delay
         self.total_iterations = 0
 
-        # Get appropriate device strategy
-        self.strategy = get_device_strategy()
+        # Try to get existing strategy from context, or create new one
+        try:
+            self.strategy = tf.distribute.get_strategy()
+        except RuntimeError:
+            self.strategy = get_device_strategy()
 
         # Initialize all components within strategy scope
         with self.strategy.scope():

@@ -97,10 +97,13 @@ class ModelBasedAgent:
         self.curiosity_weight = curiosity_weight
         self.base_agent = base_agent
 
-        # Use the same strategy as the base agent
-        self.strategy = base_agent.strategy
+        # Try to get existing strategy from context, or use base agent's
+        try:
+            self.strategy = tf.distribute.get_strategy()
+        except RuntimeError:
+            self.strategy = base_agent.strategy
 
-        # Initialize world model and optimizer using the same strategy
+        # Initialize world model and optimizer using strategy
         with self.strategy.scope():
             self.world_model = WorldModel(state_dim, action_dim)
             self.optimizer = tf.keras.optimizers.Adam(learning_rate)
