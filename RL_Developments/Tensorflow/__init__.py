@@ -33,7 +33,9 @@ from .environment import Environment
 from .rl_environments import GymEnvironment
 
 # Advanced RL algorithms
-from .advanced_rl_algorithms import SACAgent, TD3Agent
+from .advanced_rl_algorithms import SACAgent
+from .td3 import TD3Network, TD3Agent
+from .model_based import WorldModel, ModelBasedAgent
 from .curiosity_driven_exploration import CuriosityDrivenAgent
 from .deep_rl_algorithms import DQNAgent, PPOAgent
 from .imitation_learning import BehavioralCloning, DAgger
@@ -58,6 +60,9 @@ from .rl_module import (
     train_rl_agent
 )
 
+# Utility functions
+from .utils import get_device_strategy, update_target_network, create_optimizer
+
 # Newly added advanced RL components
 from .hierarchical_rl import HierarchicalRL
 from .offline_rl import OfflineRL
@@ -68,14 +73,17 @@ __all__ = [
     # Agentic behavior and cognition modules
     'AgenticBehavior',
     'CognitionAgent',
-    
+
     # RL environment and frameworks
     'Environment',
     'GymEnvironment',
-    
+
     # Advanced RL algorithms
     'SACAgent',
+    'TD3Network',
     'TD3Agent',
+    'WorldModel',
+    'ModelBasedAgent',
     'CuriosityDrivenAgent',
     'DQNAgent',
     'PPOAgent',
@@ -91,7 +99,7 @@ __all__ = [
     'QNetwork',
     'AdvancedRLAgent',
     'SelfCuringRL',
-    
+
     # RL algorithms and modules
     'PolicyGradient',
     'QLearning',
@@ -105,7 +113,12 @@ __all__ = [
     'update_ppo',
     'get_minibatches',
     'train_rl_agent',
-    
+
+    # Utility functions
+    'get_device_strategy',
+    'update_target_network',
+    'create_optimizer',
+
     # Newly added advanced RL components
     'HierarchicalRL',
     'OfflineRL',

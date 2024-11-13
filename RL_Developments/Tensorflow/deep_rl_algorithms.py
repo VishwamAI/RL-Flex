@@ -139,7 +139,7 @@ class DQNAgent:
         """Select action using epsilon-greedy policy."""
         if training and np.random.random() < self.epsilon:
             return np.random.randint(self.action_dim)
-        
+
         state = tf.convert_to_tensor([state], dtype=tf.float32)
         q_values = self.q_network(state)
         return tf.argmax(q_values[0]).numpy()
@@ -149,37 +149,35 @@ class DQNAgent:
         with self.strategy.scope():
             with tf.GradientTape() as tape:
                 loss = self._compute_loss(state, action, reward, next_state, done)
-            
+
             # Compute and apply gradients
             gradients = tape.gradient(loss, self.q_network.trainable_variables)
             self.optimizer.apply_gradients(zip(gradients, self.q_network.trainable_variables))
 
             # Update exploration rate
             self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
-            
+
             return loss.numpy()
 
     def _compute_loss(self, state, action, reward, next_state, done):
         """Compute TD loss for DQN update."""
         state = tf.convert_to_tensor([state], dtype=tf.float32)
         next_state = tf.convert_to_tensor([next_state], dtype=tf.float32)
-        
+
         # Compute target Q-values
         next_q_values = self.target_network(next_state)
         max_next_q = tf.reduce_max(next_q_values, axis=1)
         target = reward + (1 - done) * self.gamma * max_next_q
-        
+
         # Compute current Q-values and gather the Q-value for the action taken
         current_q_values = self.q_network(state)
         current_q = tf.gather(current_q_values[0], action)
-        
+
         return tf.keras.losses.MSE(target, current_q)
 
     def update_target_network(self):
         """Synchronize target network with current network."""
         self.target_network.set_weights(self.q_network.get_weights())
-
-# Device handling utility (already defined above)
 
 class PPOAgent:
     """Proximal Policy Optimization (PPO) agent implementation in TensorFlow.
@@ -250,4 +248,256 @@ class PPOAgent:
                 'policy_loss': float(tf.reduce_mean(loss).numpy()),
                 'value_loss': float(tf.reduce_mean(value_loss).numpy()),
                 'entropy': float(tf.reduce_mean(entropy).numpy())
+            }
+
+class SACNetwork(tf.keras.Model):
+    """Soft Actor-Critic network implementation in TensorFlow.
+
+    Implements the neural networks for SAC, including:
+    - Policy network (actor)
+    - Twin Q-networks (critics)
+
+    Architecture matches the JAX implementation for consistency.
+    Uses TensorFlow's distribution strategy for device handling.
+    """
+    def __init__(self, state_dim: int, action_dim: int, hidden_dim: int = 64):
+        """Initialize SAC networks.
+
+        Args:
+            state_dim: Dimension of the state space
+            action_dim: Dimension of the action space
+            hidden_dim: Dimension of hidden layers
+        """
+        super().__init__()
+        self.action_dim = action_dim
+
+        # Policy network
+        self.policy_net = tf.keras.Sequential([
+            tf.keras.layers.Dense(hidden_dim, activation='relu',
+                                kernel_initializer='glorot_uniform'),
+            tf.keras.layers.Dense(hidden_dim, activation='relu',
+                                kernel_initializer='glorot_uniform'),
+            tf.keras.layers.Dense(action_dim * 2, kernel_initializer='glorot_uniform')
+        ])
+
+        # Twin Q-networks
+        self.q1_net = tf.keras.Sequential([
+            tf.keras.layers.Dense(hidden_dim, activation='relu',
+                                kernel_initializer='glorot_uniform'),
+            tf.keras.layers.Dense(hidden_dim, activation='relu',
+                                kernel_initializer='glorot_uniform'),
+            tf.keras.layers.Dense(1, kernel_initializer='glorot_uniform')
+        ])
+
+        self.q2_net = tf.keras.Sequential([
+            tf.keras.layers.Dense(hidden_dim, activation='relu',
+                                kernel_initializer='glorot_uniform'),
+            tf.keras.layers.Dense(hidden_dim, activation='relu',
+                                kernel_initializer='glorot_uniform'),
+            tf.keras.layers.Dense(1, kernel_initializer='glorot_uniform')
+        ])
+
+        # Build networks
+        self.build([(None, state_dim), (None, action_dim)])
+
+    def build(self, input_shapes: list) -> None:
+        """Build the model by running a forward pass with dummy inputs."""
+        state_shape, action_shape = input_shapes
+        dummy_state = tf.keras.Input(shape=state_shape[1:])
+        dummy_action = tf.keras.Input(shape=action_shape[1:])
+
+        self.policy_net(dummy_state)
+        self.q1_net(tf.concat([dummy_state, dummy_action], axis=-1))
+        self.q2_net(tf.concat([dummy_state, dummy_action], axis=-1))
+
+        super().build(input_shapes)
+
+    def get_action(self, state: tf.Tensor, training: bool = False) -> Tuple[tf.Tensor, tf.Tensor]:
+        """Sample action from the policy network.
+
+        Args:
+            state: Current state observation
+            training: Whether to sample (True) or use mean (False)
+
+        Returns:
+            Tuple of (sampled_action, log_probability)
+        """
+        mean, log_std = tf.split(self.policy_net(state), 2, axis=-1)
+        log_std = tf.clip_by_value(log_std, -20, 2)
+        std = tf.exp(log_std)
+
+        # Sample action using reparameterization trick
+        eps = tf.random.normal(tf.shape(mean)) if training else 0.0
+        action = mean + eps * std
+
+        # Compute log probability
+        log_prob = -0.5 * (
+            tf.math.log(2 * np.pi) +
+            2 * log_std +
+            tf.square((action - mean) / (std + 1e-6))
+        )
+        log_prob = tf.reduce_sum(log_prob, axis=-1, keepdims=True)
+
+        # Apply tanh squashing
+        action = tf.tanh(action)
+        log_prob -= tf.reduce_sum(
+            tf.math.log(1 - tf.square(action) + 1e-6),
+            axis=-1, keepdims=True
+        )
+
+        return action, log_prob
+
+    def q_values(self, state: tf.Tensor, action: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor]:
+        """Compute Q-values from both Q-networks.
+
+        Args:
+            state: Current state observation
+            action: Action to evaluate
+
+        Returns:
+            Tuple of (Q1_values, Q2_values)
+        """
+        inputs = tf.concat([state, action], axis=-1)
+        return self.q1_net(inputs), self.q2_net(inputs)
+
+class SACAgent:
+    """Soft Actor-Critic agent implementation in TensorFlow.
+
+    Implements the SAC algorithm with automatic temperature tuning.
+    Uses TensorFlow's distribution strategy for device handling.
+    """
+    def __init__(self, state_dim: int, action_dim: int, learning_rate: float = 3e-4,
+                 gamma: float = 0.99, tau: float = 0.005):
+        """Initialize SAC agent.
+
+        Args:
+            state_dim: Dimension of the state space
+            action_dim: Dimension of the action space
+            learning_rate: Learning rate for all networks
+            gamma: Discount factor
+            tau: Soft update coefficient
+        """
+        self.gamma = gamma
+        self.tau = tau
+        self.target_entropy = -action_dim  # Heuristic value
+
+        # Get appropriate device strategy
+        self.strategy = get_device_strategy()
+
+        with self.strategy.scope():
+            # Create networks
+            self.actor_critic = SACNetwork(state_dim, action_dim)
+            self.target_critic = SACNetwork(state_dim, action_dim)
+
+            # Copy weights to target network
+            for target, source in zip(self.target_critic.variables,
+                                    self.actor_critic.variables):
+                target.assign(source)
+
+            # Create optimizers
+            self.actor_optimizer = tf.keras.optimizers.Adam(learning_rate)
+            self.critic_optimizer = tf.keras.optimizers.Adam(learning_rate)
+
+            # Initialize log alpha (temperature parameter)
+            self.log_alpha = tf.Variable(0.0)
+            self.alpha_optimizer = tf.keras.optimizers.Adam(learning_rate)
+
+    def get_action(self, state: tf.Tensor, training: bool = False) -> tf.Tensor:
+        """Select action using current policy.
+
+        Args:
+            state: Current state observation
+            training: Whether to sample (True) or use mean (False)
+
+        Returns:
+            Selected action
+        """
+        state = tf.convert_to_tensor([state], dtype=tf.float32)
+        action, _ = self.actor_critic.get_action(state, training)
+        return action[0]
+
+    def update(self, states: tf.Tensor, actions: tf.Tensor, rewards: tf.Tensor,
+               next_states: tf.Tensor, dones: tf.Tensor) -> Dict[str, float]:
+        """Update networks using SAC objective.
+
+        Args:
+            states: Batch of state observations
+            actions: Batch of actions taken
+            rewards: Batch of rewards received
+            next_states: Batch of next state observations
+            dones: Batch of done flags
+
+        Returns:
+            Dictionary containing loss metrics
+        """
+        with self.strategy.scope():
+            # Update critic
+            with tf.GradientTape(persistent=True) as tape:
+                # Sample actions and compute log probs for next states
+                next_actions, next_log_probs = self.actor_critic.get_action(next_states, True)
+
+                # Compute target Q-values
+                next_q1, next_q2 = self.target_critic.q_values(next_states, next_actions)
+                next_q = tf.minimum(next_q1, next_q2)
+
+                # Compute target value with entropy
+                alpha = tf.exp(self.log_alpha)
+                target_q = rewards + self.gamma * (1 - dones) * (next_q - alpha * next_log_probs)
+
+                # Compute current Q-values
+                current_q1, current_q2 = self.actor_critic.q_values(states, actions)
+
+                # Compute critic losses
+                q1_loss = tf.reduce_mean(tf.square(current_q1 - target_q))
+                q2_loss = tf.reduce_mean(tf.square(current_q2 - target_q))
+                critic_loss = q1_loss + q2_loss
+
+            # Update critics
+            critic_vars = (self.actor_critic.q1_net.trainable_variables +
+                         self.actor_critic.q2_net.trainable_variables)
+            critic_grads = tape.gradient(critic_loss, critic_vars)
+            self.critic_optimizer.apply_gradients(zip(critic_grads, critic_vars))
+
+            # Update actor
+            with tf.GradientTape(persistent=True) as tape:
+                # Sample actions and compute log probs
+                actions, log_probs = self.actor_critic.get_action(states, True)
+
+                # Compute Q-values for sampled actions
+                q1, q2 = self.actor_critic.q_values(states, actions)
+                q = tf.minimum(q1, q2)
+
+                # Compute actor loss with entropy
+                alpha = tf.exp(self.log_alpha)
+                actor_loss = tf.reduce_mean(alpha * log_probs - q)
+
+                # Compute temperature loss
+                alpha_loss = -tf.reduce_mean(
+                    self.log_alpha * tf.stop_gradient(log_probs + self.target_entropy)
+                )
+
+            # Update actor
+            actor_grads = tape.gradient(
+                actor_loss,
+                self.actor_critic.policy_net.trainable_variables
+            )
+            self.actor_optimizer.apply_gradients(zip(
+                actor_grads,
+                self.actor_critic.policy_net.trainable_variables
+            ))
+
+            # Update temperature parameter
+            alpha_grads = tape.gradient(alpha_loss, [self.log_alpha])
+            self.alpha_optimizer.apply_gradients(zip(alpha_grads, [self.log_alpha]))
+
+            # Soft update target network
+            for target, source in zip(self.target_critic.variables,
+                                    self.actor_critic.variables):
+                target.assign(target * (1 - self.tau) + source * self.tau)
+
+            return {
+                'critic_loss': float(critic_loss.numpy()),
+                'actor_loss': float(actor_loss.numpy()),
+                'alpha_loss': float(alpha_loss.numpy()),
+                'alpha': float(alpha.numpy())
             }
