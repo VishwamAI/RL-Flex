@@ -1,5 +1,6 @@
 import tensorflow as tf
 import numpy as np
+from typing import Tuple, Dict, Any, Optional
 
 class DQNetwork(tf.keras.Model):
     """Deep Q-Network implementation in TensorFlow.
@@ -38,48 +39,52 @@ class ActorCritic(tf.keras.Model):
 
     Combined network that outputs both policy (actor) and value (critic).
     Architecture matches the JAX implementation for consistency.
+
+    Args:
+        action_dim: Dimension of the action space
     """
-    def __init__(self, state_dim, action_dim):
+    def __init__(self, state_dim: int, action_dim: int):
         super().__init__()
         # Actor network
         self.actor_dense1 = tf.keras.layers.Dense(64, activation='relu',
-                                                kernel_initializer='glorot_uniform')
+                                               kernel_initializer='glorot_uniform')
         self.actor_dense2 = tf.keras.layers.Dense(64, activation='relu',
-                                                kernel_initializer='glorot_uniform')
-        self.actor_out = tf.keras.layers.Dense(action_dim, activation='softmax',
-                                             kernel_initializer='glorot_uniform')
+                                               kernel_initializer='glorot_uniform')
+        self.actor_out = tf.keras.layers.Dense(action_dim, activation=None,
+                                            kernel_initializer='glorot_uniform')
 
         # Critic network
         self.critic_dense1 = tf.keras.layers.Dense(64, activation='relu',
-                                                 kernel_initializer='glorot_uniform')
+                                                kernel_initializer='glorot_uniform')
         self.critic_dense2 = tf.keras.layers.Dense(64, activation='relu',
-                                                 kernel_initializer='glorot_uniform')
+                                                kernel_initializer='glorot_uniform')
         self.critic_out = tf.keras.layers.Dense(1, kernel_initializer='glorot_uniform')
 
         # Build model with sample input
         self.build((None, state_dim))
 
-    def call(self, x, training=False):
+    def call(self, x: tf.Tensor, training: Optional[bool] = None) -> Tuple[tf.Tensor, tf.Tensor]:
         """Forward pass through both actor and critic networks.
 
         Args:
             x: Input tensor representing the state
-            training: Boolean indicating training mode
+            training: Boolean indicating training mode (unused, kept for API consistency)
 
         Returns:
             Tuple of (action_probabilities, value_estimate)
         """
         # Actor forward pass
-        actor_x = self.actor_dense1(x)
-        actor_x = self.actor_dense2(actor_x)
-        action_probs = self.actor_out(actor_x)
+        actor_hidden = self.actor_dense1(x)
+        actor_hidden = self.actor_dense2(actor_hidden)
+        actor_output = self.actor_out(actor_hidden)
+        action_probs = tf.nn.softmax(actor_output)
 
         # Critic forward pass
-        critic_x = self.critic_dense1(x)
-        critic_x = self.critic_dense2(critic_x)
-        value = self.critic_out(critic_x)
+        critic_hidden = self.critic_dense1(x)
+        critic_hidden = self.critic_dense2(critic_hidden)
+        value = self.critic_out(critic_hidden)
 
-        return action_probs, value
+        return action_probs, tf.squeeze(value, axis=-1)
 
 # Device handling utility
 def get_device_strategy():
@@ -182,25 +187,16 @@ class PPOAgent:
     Implements PPO algorithm with clipped objective and value function loss.
     Uses TensorFlow's distribution strategy for device handling.
     """
-    def __init__(self, state_dim, action_dim, learning_rate=3e-4, gamma=0.99,
-                 clip_ratio=0.2, value_coef=0.5, entropy_coef=0.01):
+    def __init__(self, state_dim: int, action_dim: int, learning_rate: float = 3e-4):
         """Initialize PPO Agent.
 
         Args:
             state_dim: Dimension of the state space
             action_dim: Dimension of the action space
             learning_rate: Learning rate for the optimizer
-            gamma: Discount factor for future rewards
-            clip_ratio: PPO clipping parameter
-            value_coef: Value loss coefficient
-            entropy_coef: Entropy bonus coefficient
         """
         self.state_dim = state_dim
         self.action_dim = action_dim
-        self.gamma = gamma
-        self.clip_ratio = clip_ratio
-        self.value_coef = value_coef
-        self.entropy_coef = entropy_coef
 
         # Get appropriate device strategy
         self.strategy = get_device_strategy()
@@ -210,84 +206,48 @@ class PPOAgent:
             self.ac_network = ActorCritic(state_dim, action_dim)
             self.optimizer = tf.keras.optimizers.Adam(learning_rate)
 
-    def get_action(self, state):
-        """Select action using current policy.
-
-        Args:
-            state: Current state observation
-
-        Returns:
-            Selected action and corresponding log probability
-        """
+    def get_action(self, state: tf.Tensor) -> Tuple[int, tf.Tensor]:
+        """Select action using current policy."""
         state = tf.convert_to_tensor([state], dtype=tf.float32)
         action_probs, _ = self.ac_network(state)
+        action = tf.random.categorical(tf.math.log(action_probs), 1)
+        return int(action[0, 0]), action_probs[0]
 
-        # Sample action from probability distribution
-        action_dist = tf.random.categorical(tf.math.log(action_probs), 1)
-        action = int(action_dist[0, 0])
-
-        # Compute log probability of selected action
-        log_prob = tf.math.log(action_probs[0, action])
-
-        return action, log_prob.numpy()
-
-    def update(self, states, actions, old_log_probs, advantages, returns):
-        """Update policy and value function using PPO objective.
-
-        Args:
-            states: Batch of state observations
-            actions: Batch of actions taken
-            old_log_probs: Log probabilities of actions under old policy
-            advantages: Computed advantages
-            returns: Computed returns
-
-        Returns:
-            Dictionary containing loss metrics
-        """
+    def update(self, states: tf.Tensor, actions: tf.Tensor, rewards: tf.Tensor,
+               dones: tf.Tensor, old_log_probs: tf.Tensor) -> Dict[str, float]:
+        """Update policy and value function using PPO objective."""
         with self.strategy.scope():
             with tf.GradientTape() as tape:
                 # Forward pass
                 action_probs, values = self.ac_network(states)
 
-                # Compute log probabilities of actions
+                # Compute log probabilities
                 indices = tf.range(0, tf.shape(actions)[0])
                 action_indices = tf.stack([indices, actions], axis=1)
                 new_log_probs = tf.math.log(tf.gather_nd(action_probs, action_indices))
 
-                # Compute ratio and clipped ratio
+                # Compute advantages (simplified to match JAX)
+                advantages = rewards - values
+
+                # Compute ratio and clipped objective (matching JAX parameters)
                 ratio = tf.exp(new_log_probs - old_log_probs)
-                clipped_ratio = tf.clip_by_value(ratio, 1 - self.clip_ratio, 1 + self.clip_ratio)
+                clip_adv = tf.clip_by_value(ratio, 0.8, 1.2) * advantages
+                loss = -tf.minimum(ratio * advantages, clip_adv)
 
-                # Compute policy loss
-                policy_loss = -tf.reduce_mean(
-                    tf.minimum(
-                        ratio * advantages,
-                        clipped_ratio * advantages
-                    )
-                )
+                # Compute value loss and entropy (matching JAX coefficients)
+                value_loss = tf.square(rewards - values)
+                entropy = -tf.reduce_sum(action_probs * tf.math.log(action_probs + 1e-10), axis=-1)
 
-                # Compute value loss
-                value_loss = tf.reduce_mean(tf.square(returns - values))
-
-                # Compute entropy bonus
-                entropy = -tf.reduce_mean(
-                    tf.reduce_sum(action_probs * tf.math.log(action_probs + 1e-10), axis=1)
-                )
-
-                # Compute total loss
-                total_loss = (
-                    policy_loss +
-                    self.value_coef * value_loss -
-                    self.entropy_coef * entropy
-                )
+                # Compute total loss with matching coefficients
+                total_loss = tf.reduce_mean(loss + 0.5 * value_loss - 0.01 * entropy)
 
             # Compute and apply gradients
             gradients = tape.gradient(total_loss, self.ac_network.trainable_variables)
             self.optimizer.apply_gradients(zip(gradients, self.ac_network.trainable_variables))
 
             return {
-                'total_loss': total_loss.numpy(),
-                'policy_loss': policy_loss.numpy(),
-                'value_loss': value_loss.numpy(),
-                'entropy': entropy.numpy()
+                'total_loss': float(total_loss.numpy()),
+                'policy_loss': float(tf.reduce_mean(loss).numpy()),
+                'value_loss': float(tf.reduce_mean(value_loss).numpy()),
+                'entropy': float(tf.reduce_mean(entropy).numpy())
             }
