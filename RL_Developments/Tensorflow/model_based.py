@@ -42,28 +42,33 @@ class WorldModel(tf.keras.Model):
             self.dynamics_models.append(model)
 
     def call(self, states: tf.Tensor, actions: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
-        """Predict next states and rewards with uncertainty estimation.
+        """Forward pass through the world model.
 
         Args:
             states: Current state observations
-            actions: Actions to take
+            actions: Actions taken
 
         Returns:
-            Tuple of (predicted_next_states, predicted_rewards, prediction_uncertainty)
+            Tuple of (predicted next states, predicted rewards, prediction uncertainty)
         """
-        inputs = tf.concat([states, actions], axis=-1)
+        # Concatenate states and actions for input
+        inputs = tf.concat([states, actions], axis=1)
 
         # Get predictions from all ensemble models
-        predictions = tf.stack([model(inputs) for model in self.dynamics_models])
+        predictions = []
+        for model in self.dynamics_models:
+            pred = model(inputs)
+            predictions.append(pred)
+        predictions = tf.stack(predictions)  # [ensemble_size, batch_size, state_dim + 1]
 
         # Split predictions into next states and rewards
-        next_states_ensemble = predictions[..., :self.state_dim]
-        rewards_ensemble = predictions[..., -1:]
+        next_states_ensemble = predictions[..., :-1]  # [ensemble_size, batch_size, state_dim]
+        rewards_ensemble = predictions[..., -1:]      # [ensemble_size, batch_size, 1]
 
         # Compute means and uncertainties
-        next_states = tf.reduce_mean(next_states_ensemble, axis=0)
-        rewards = tf.reduce_mean(rewards_ensemble, axis=0)
-        uncertainties = tf.math.reduce_std(next_states_ensemble, axis=0)
+        next_states = tf.reduce_mean(next_states_ensemble, axis=0)  # [batch_size, state_dim]
+        rewards = tf.reduce_mean(rewards_ensemble, axis=0)          # [batch_size, 1]
+        uncertainties = tf.math.reduce_std(next_states_ensemble, axis=0)  # [batch_size, state_dim]
 
         return next_states, rewards, uncertainties
 
@@ -122,7 +127,17 @@ class ModelBasedAgent:
         Returns:
             Selected action
         """
-        return self.base_agent.get_action(state, training)
+        # Ensure state has correct shape (batch_size, state_dim)
+        if len(state.shape) == 3:
+            state = tf.squeeze(state, axis=1)
+        elif len(state.shape) == 1:
+            state = tf.expand_dims(state, axis=0)
+
+        action = self.base_agent.get_action(state, training)
+        # Ensure action has batch dimension
+        if len(action.shape) == 1:
+            action = tf.expand_dims(action, axis=0)
+        return action
 
     def update_world_model(self, states: tf.Tensor, actions: tf.Tensor,
                           next_states: tf.Tensor, rewards: tf.Tensor) -> Dict[str, float]:
@@ -137,7 +152,7 @@ class ModelBasedAgent:
         Returns:
             Dictionary containing loss metrics
         """
-        with self.strategy.scope():
+        def train_step(states, actions, next_states, rewards):
             with tf.GradientTape() as tape:
                 # Predict next states and rewards
                 pred_next_states, pred_rewards, _ = self.world_model(states, actions)
@@ -151,11 +166,17 @@ class ModelBasedAgent:
             grads = tape.gradient(total_loss, self.world_model.trainable_variables)
             self.optimizer.apply_gradients(zip(grads, self.world_model.trainable_variables))
 
-            return {
-                'state_loss': float(state_loss.numpy()),
-                'reward_loss': float(reward_loss.numpy()),
-                'total_loss': float(total_loss.numpy())
-            }
+            return total_loss, state_loss, reward_loss
+
+        # Run training step in distribution strategy context
+        total_loss, state_loss, reward_loss = self.strategy.run(
+            train_step, args=(states, actions, next_states, rewards))
+
+        return {
+            'state_loss': float(state_loss.numpy()),
+            'reward_loss': float(reward_loss.numpy()),
+            'total_loss': float(total_loss.numpy())
+        }
 
     def update(self, states: tf.Tensor, actions: tf.Tensor, rewards: tf.Tensor,
                next_states: tf.Tensor, dones: tf.Tensor) -> Dict[str, float]:

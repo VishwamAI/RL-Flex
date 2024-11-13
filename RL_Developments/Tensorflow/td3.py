@@ -74,6 +74,11 @@ class TD3Network(tf.keras.Model):
         Returns:
             Action scaled by max_action
         """
+        if len(state.shape) == 3:
+            state = tf.squeeze(state, axis=1)
+        elif len(state.shape) == 1:
+            state = tf.expand_dims(state, axis=0)
+
         action = self.actor(state)
         if noise is not None:
             action += noise
@@ -180,15 +185,7 @@ class TD3Agent:
             Dictionary containing loss metrics
         """
         # Ensure we're in the strategy scope for all operations
-        with self.strategy.scope():
-            # Ensure tensors are in the correct format
-            states = tf.convert_to_tensor(states, dtype=tf.float32)
-            actions = tf.convert_to_tensor(actions, dtype=tf.float32)
-            rewards = tf.convert_to_tensor(rewards, dtype=tf.float32)
-            next_states = tf.convert_to_tensor(next_states, dtype=tf.float32)
-            dones = tf.convert_to_tensor(dones, dtype=tf.float32)
-
-            # Update critics
+        def train_step(states, actions, rewards, next_states, dones):
             with tf.GradientTape(persistent=True) as tape:
                 # Select next actions with target policy smoothing
                 noise = tf.clip_by_value(
@@ -219,7 +216,6 @@ class TD3Agent:
             actor_loss = 0.0
             # Delayed policy updates
             if self.total_iterations % self.policy_delay == 0:
-                # Update actor
                 with tf.GradientTape() as tape:
                     # Compute actor loss
                     actor_actions = self.actor_critic.get_action(states)
@@ -241,9 +237,15 @@ class TD3Agent:
                                         self.actor_critic.variables):
                     target.assign(target * (1 - self.tau) + source * self.tau)
 
-            self.total_iterations += 1
+            return critic_loss, actor_loss
 
-            return {
-                'critic_loss': float(critic_loss.numpy()),
-                'actor_loss': float(actor_loss.numpy()) if isinstance(actor_loss, tf.Tensor) else actor_loss
-            }
+        # Run training step in distribution strategy context
+        critic_loss, actor_loss = self.strategy.run(
+            train_step, args=(states, actions, rewards, next_states, dones))
+
+        self.total_iterations += 1
+
+        return {
+            'critic_loss': float(critic_loss.numpy()),
+            'actor_loss': float(actor_loss.numpy()) if isinstance(actor_loss, tf.Tensor) else actor_loss
+        }
