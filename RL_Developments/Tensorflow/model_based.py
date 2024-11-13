@@ -27,15 +27,19 @@ class WorldModel(tf.keras.Model):
         self.ensemble_size = ensemble_size
 
         # Create ensemble of dynamics models
-        self.dynamics_models = [
-            tf.keras.Sequential([
+        self.dynamics_models = []
+        for _ in range(ensemble_size):
+            model = tf.keras.Sequential([
                 tf.keras.layers.Dense(hidden_dim, activation='relu',
-                                    kernel_initializer='glorot_uniform'),
+                                    kernel_initializer='glorot_uniform',
+                                    input_shape=(state_dim + action_dim,)),
                 tf.keras.layers.Dense(hidden_dim, activation='relu',
                                     kernel_initializer='glorot_uniform'),
                 tf.keras.layers.Dense(state_dim + 1)  # predict next state and reward
-            ]) for _ in range(ensemble_size)
-        ]
+            ])
+            # Build model to define output shape
+            model.build((None, state_dim + action_dim))
+            self.dynamics_models.append(model)
 
     def call(self, states: tf.Tensor, actions: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
         """Predict next states and rewards with uncertainty estimation.
