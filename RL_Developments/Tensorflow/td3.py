@@ -123,19 +123,18 @@ class TD3Agent:
         # Get appropriate device strategy
         self.strategy = get_device_strategy()
 
-        with self.strategy.scope():
-            # Create networks
-            self.actor_critic = TD3Network(state_dim, action_dim, max_action)
-            self.target_network = TD3Network(state_dim, action_dim, max_action)
+        # Create networks
+        self.actor_critic = TD3Network(state_dim, action_dim, max_action)
+        self.target_network = TD3Network(state_dim, action_dim, max_action)
 
-            # Copy weights to target network
-            for target, source in zip(self.target_network.variables,
-                                    self.actor_critic.variables):
-                target.assign(source)
+        # Copy weights to target network
+        for target, source in zip(self.target_network.variables,
+                                self.actor_critic.variables):
+            target.assign(source)
 
-            # Create optimizers
-            self.actor_optimizer = tf.keras.optimizers.Adam(learning_rate)
-            self.critic_optimizer = tf.keras.optimizers.Adam(learning_rate)
+        # Create optimizers
+        self.actor_optimizer = tf.keras.optimizers.Adam(learning_rate)
+        self.critic_optimizer = tf.keras.optimizers.Adam(learning_rate)
 
     def get_action(self, state: tf.Tensor, noise_scale: float = 0.1) -> tf.Tensor:
         """Select action using current policy.
@@ -166,63 +165,62 @@ class TD3Agent:
         Returns:
             Dictionary containing loss metrics
         """
-        with self.strategy.scope():
-            # Update critics
-            with tf.GradientTape(persistent=True) as tape:
-                # Select next actions with target policy smoothing
-                noise = tf.clip_by_value(
-                    tf.random.normal(tf.shape(actions)) * self.policy_noise,
-                    -self.noise_clip, self.noise_clip
-                )
-                next_actions = self.target_network.get_action(next_states, noise)
+        # Update critics
+        with tf.GradientTape(persistent=True) as tape:
+            # Select next actions with target policy smoothing
+            noise = tf.clip_by_value(
+                tf.random.normal(tf.shape(actions)) * self.policy_noise,
+                -self.noise_clip, self.noise_clip
+            )
+            next_actions = self.target_network.get_action(next_states, noise)
 
-                # Compute target Q-values
-                target_q1, target_q2 = self.target_network.q_values(next_states, next_actions)
-                target_q = tf.minimum(target_q1, target_q2)
-                target_q = rewards + self.gamma * (1 - dones) * target_q
+            # Compute target Q-values
+            target_q1, target_q2 = self.target_network.q_values(next_states, next_actions)
+            target_q = tf.minimum(target_q1, target_q2)
+            target_q = rewards + self.gamma * (1 - dones) * target_q
 
-                # Compute current Q-values
-                current_q1, current_q2 = self.actor_critic.q_values(states, actions)
+            # Compute current Q-values
+            current_q1, current_q2 = self.actor_critic.q_values(states, actions)
 
-                # Compute critic losses
-                critic1_loss = tf.reduce_mean(tf.square(current_q1 - target_q))
-                critic2_loss = tf.reduce_mean(tf.square(current_q2 - target_q))
-                critic_loss = critic1_loss + critic2_loss
+            # Compute critic losses
+            critic1_loss = tf.reduce_mean(tf.square(current_q1 - target_q))
+            critic2_loss = tf.reduce_mean(tf.square(current_q2 - target_q))
+            critic_loss = critic1_loss + critic2_loss
 
-            # Update critics
-            critic_vars = (self.actor_critic.critic1.trainable_variables +
-                         self.actor_critic.critic2.trainable_variables)
-            critic_grads = tape.gradient(critic_loss, critic_vars)
-            self.critic_optimizer.apply_gradients(zip(critic_grads, critic_vars))
+        # Update critics
+        critic_vars = (self.actor_critic.critic1.trainable_variables +
+                     self.actor_critic.critic2.trainable_variables)
+        critic_grads = tape.gradient(critic_loss, critic_vars)
+        self.critic_optimizer.apply_gradients(zip(critic_grads, critic_vars))
 
-            actor_loss = 0.0
-            # Delayed policy updates
-            if self.total_iterations % self.policy_delay == 0:
-                # Update actor
-                with tf.GradientTape() as tape:
-                    # Compute actor loss
-                    actor_actions = self.actor_critic.get_action(states)
-                    actor_q1, _ = self.actor_critic.q_values(states, actor_actions)
-                    actor_loss = -tf.reduce_mean(actor_q1)
+        actor_loss = 0.0
+        # Delayed policy updates
+        if self.total_iterations % self.policy_delay == 0:
+            # Update actor
+            with tf.GradientTape() as tape:
+                # Compute actor loss
+                actor_actions = self.actor_critic.get_action(states)
+                actor_q1, _ = self.actor_critic.q_values(states, actor_actions)
+                actor_loss = -tf.reduce_mean(actor_q1)
 
-                # Update actor
-                actor_grads = tape.gradient(
-                    actor_loss,
-                    self.actor_critic.actor.trainable_variables
-                )
-                self.actor_optimizer.apply_gradients(zip(
-                    actor_grads,
-                    self.actor_critic.actor.trainable_variables
-                ))
+            # Update actor
+            actor_grads = tape.gradient(
+                actor_loss,
+                self.actor_critic.actor.trainable_variables
+            )
+            self.actor_optimizer.apply_gradients(zip(
+                actor_grads,
+                self.actor_critic.actor.trainable_variables
+            ))
 
-                # Soft update target networks
-                for target, source in zip(self.target_network.variables,
-                                        self.actor_critic.variables):
-                    target.assign(target * (1 - self.tau) + source * self.tau)
+            # Soft update target networks
+            for target, source in zip(self.target_network.variables,
+                                    self.actor_critic.variables):
+                target.assign(target * (1 - self.tau) + source * self.tau)
 
-            self.total_iterations += 1
+        self.total_iterations += 1
 
-            return {
-                'critic_loss': float(critic_loss.numpy()),
-                'actor_loss': float(actor_loss.numpy()) if isinstance(actor_loss, tf.Tensor) else actor_loss
-            }
+        return {
+            'critic_loss': float(critic_loss.numpy()),
+            'actor_loss': float(actor_loss.numpy()) if isinstance(actor_loss, tf.Tensor) else actor_loss
+        }
