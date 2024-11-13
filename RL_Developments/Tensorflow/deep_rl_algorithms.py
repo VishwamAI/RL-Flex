@@ -175,3 +175,119 @@ class DQNAgent:
         self.target_network.set_weights(self.q_network.get_weights())
 
 # Device handling utility (already defined above)
+
+class PPOAgent:
+    """Proximal Policy Optimization (PPO) agent implementation in TensorFlow.
+
+    Implements PPO algorithm with clipped objective and value function loss.
+    Uses TensorFlow's distribution strategy for device handling.
+    """
+    def __init__(self, state_dim, action_dim, learning_rate=3e-4, gamma=0.99,
+                 clip_ratio=0.2, value_coef=0.5, entropy_coef=0.01):
+        """Initialize PPO Agent.
+
+        Args:
+            state_dim: Dimension of the state space
+            action_dim: Dimension of the action space
+            learning_rate: Learning rate for the optimizer
+            gamma: Discount factor for future rewards
+            clip_ratio: PPO clipping parameter
+            value_coef: Value loss coefficient
+            entropy_coef: Entropy bonus coefficient
+        """
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+        self.gamma = gamma
+        self.clip_ratio = clip_ratio
+        self.value_coef = value_coef
+        self.entropy_coef = entropy_coef
+
+        # Get appropriate device strategy
+        self.strategy = get_device_strategy()
+
+        with self.strategy.scope():
+            # Create actor-critic network
+            self.ac_network = ActorCritic(state_dim, action_dim)
+            self.optimizer = tf.keras.optimizers.Adam(learning_rate)
+
+    def get_action(self, state):
+        """Select action using current policy.
+
+        Args:
+            state: Current state observation
+
+        Returns:
+            Selected action and corresponding log probability
+        """
+        state = tf.convert_to_tensor([state], dtype=tf.float32)
+        action_probs, _ = self.ac_network(state)
+
+        # Sample action from probability distribution
+        action_dist = tf.random.categorical(tf.math.log(action_probs), 1)
+        action = int(action_dist[0, 0])
+
+        # Compute log probability of selected action
+        log_prob = tf.math.log(action_probs[0, action])
+
+        return action, log_prob.numpy()
+
+    def update(self, states, actions, old_log_probs, advantages, returns):
+        """Update policy and value function using PPO objective.
+
+        Args:
+            states: Batch of state observations
+            actions: Batch of actions taken
+            old_log_probs: Log probabilities of actions under old policy
+            advantages: Computed advantages
+            returns: Computed returns
+
+        Returns:
+            Dictionary containing loss metrics
+        """
+        with self.strategy.scope():
+            with tf.GradientTape() as tape:
+                # Forward pass
+                action_probs, values = self.ac_network(states)
+
+                # Compute log probabilities of actions
+                indices = tf.range(0, tf.shape(actions)[0])
+                action_indices = tf.stack([indices, actions], axis=1)
+                new_log_probs = tf.math.log(tf.gather_nd(action_probs, action_indices))
+
+                # Compute ratio and clipped ratio
+                ratio = tf.exp(new_log_probs - old_log_probs)
+                clipped_ratio = tf.clip_by_value(ratio, 1 - self.clip_ratio, 1 + self.clip_ratio)
+
+                # Compute policy loss
+                policy_loss = -tf.reduce_mean(
+                    tf.minimum(
+                        ratio * advantages,
+                        clipped_ratio * advantages
+                    )
+                )
+
+                # Compute value loss
+                value_loss = tf.reduce_mean(tf.square(returns - values))
+
+                # Compute entropy bonus
+                entropy = -tf.reduce_mean(
+                    tf.reduce_sum(action_probs * tf.math.log(action_probs + 1e-10), axis=1)
+                )
+
+                # Compute total loss
+                total_loss = (
+                    policy_loss +
+                    self.value_coef * value_loss -
+                    self.entropy_coef * entropy
+                )
+
+            # Compute and apply gradients
+            gradients = tape.gradient(total_loss, self.ac_network.trainable_variables)
+            self.optimizer.apply_gradients(zip(gradients, self.ac_network.trainable_variables))
+
+            return {
+                'total_loss': total_loss.numpy(),
+                'policy_loss': policy_loss.numpy(),
+                'value_loss': value_loss.numpy(),
+                'entropy': entropy.numpy()
+            }
