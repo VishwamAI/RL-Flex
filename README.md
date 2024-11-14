@@ -1,5 +1,5 @@
 # RL-Devlopments
-
+![Visitors](https://api.visitorbadge.io/api/visitors?path=https%3A%2F%2Fgithub.com%2FVishwamAI%2FRL-Flex&countColor=%2337d67a)
 Welcome to RL-Devlopments, a repository dedicated to the development and implementation of advanced reinforcement learning algorithms and methodologies. This project focuses on various aspects of reinforcement learning, including self-curing agents, curiosity-driven exploration, model-based reinforcement learning, and recent advancements in the field.
 
 ## Table of Contents
